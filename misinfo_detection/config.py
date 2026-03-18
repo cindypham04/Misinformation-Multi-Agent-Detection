@@ -17,6 +17,7 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
+    # Loads `.env` for local development; CI can set env vars directly.
     load_dotenv()
     tavily_api_key = os.getenv("TAVILY_API_KEY", "").strip()
     if not tavily_api_key:

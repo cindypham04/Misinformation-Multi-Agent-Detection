@@ -26,6 +26,7 @@ def tavily_search(
 
 
 def _normalize_tavily_results(raw: Any) -> List[Evidence]:
+    # Tavily output shape can vary; normalize to a stable internal schema.
     # `langchain_tavily` may return a list[dict] or a dict with `results`.
     results: Any
     if isinstance(raw, dict) and "results" in raw:

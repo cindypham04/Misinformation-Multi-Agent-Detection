@@ -40,6 +40,7 @@ def build_advisor_subgraph():
     compiled = builder.compile()
 
     def run_on_parent(parent: ParentState) -> ParentState:
+        # One-shot: advisor doesn't mutate evidence, only adds analysis/advice fields.
         advisor_state: AdvisorState = AdvisorState(
             claim=parent["claim"],
             debate_log=list(parent.get("debate_log", [])),

@@ -25,6 +25,7 @@ def generate_queries(state: VerifierState) -> VerifierState:
 
 
 def retrieve_evidence(state: VerifierState, *, config: AppConfig) -> VerifierState:
+    # Verifier retrieval is kept separate from the shared evidence pool for traceability.
     retrieved: Dict[str, List[Evidence]] = state.get("retrieved_evidence", {})
     for q in state.get("generated_queries", []):
         if q in retrieved:
@@ -66,6 +67,7 @@ def build_verifier_subgraph(*, config: AppConfig):
     compiled = builder.compile()
 
     def run_on_parent(parent: ParentState) -> ParentState:
+        # Project verifier evidence + verdict/report back into the parent state.
         verifier_state: VerifierState = VerifierState(
             claim=parent["claim"],
             debate_log=list(parent.get("debate_log", [])),

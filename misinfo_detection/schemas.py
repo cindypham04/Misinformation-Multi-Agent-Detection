@@ -15,6 +15,7 @@ VerdictLabel = Literal["true", "false", "insufficient"]
 
 
 class ParentState(TypedDict):
+    # Shared state owned by the parent graph; subgraphs project outputs back into this.
     # Input + configuration
     claim: str
     guidance: str
@@ -22,7 +23,7 @@ class ParentState(TypedDict):
     max_rounds: int
 
     # Shared cross-agent artifacts
-    evidence_pool: Dict[str, List[Evidence]]  # keyed by query
+    evidence_pool: Dict[str, List[Evidence]]  # query -> evidence list (shared across agents)
     debate_log: List[str]
     latest_negative_argument: Optional[str]
     latest_affirmative_argument: Optional[str]
@@ -40,6 +41,7 @@ DebaterRole = Literal["negative", "affirmative"]
 
 
 class DebaterState(TypedDict):
+    # Private per-debater state used inside the debater subgraph.
     claim: str
     guidance: str
     debate_log: List[str]
@@ -52,6 +54,7 @@ class DebaterState(TypedDict):
 
 
 class AdvisorState(TypedDict):
+    # Advisor runs once after debate to highlight gaps/weaknesses.
     claim: str
     debate_log: List[str]
     evidence_pool: Dict[str, List[Evidence]]
@@ -61,6 +64,7 @@ class AdvisorState(TypedDict):
 
 
 class VerifierState(TypedDict):
+    # Verifier runs once at the end and may retrieve additional evidence.
     claim: str
     debate_log: List[str]
     evidence_pool: Dict[str, List[Evidence]]

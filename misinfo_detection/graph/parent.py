@@ -42,6 +42,7 @@ def build_parent_graph(*, config: AppConfig | None = None):
     builder.add_edge("negative", "affirmative")
     builder.add_edge("affirmative", "increment_round")
 
+    # Loop debate until max rounds, then transition to advisor/verifier.
     builder.add_conditional_edges("increment_round", _continue_debate)
 
     builder.add_edge("advisor", "verifier")

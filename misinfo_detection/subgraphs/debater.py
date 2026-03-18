@@ -49,6 +49,7 @@ def build_debater_subgraph(*, role: DebaterRole, config: AppConfig):
     builder: StateGraph = StateGraph(DebaterState)
 
     def retrieve_evidence(state: DebaterState) -> DebaterState:
+        # Keep retrieval local to the subgraph; parent merges into shared pool afterward.
         retrieved: Dict[str, List[Evidence]] = state.get("retrieved_evidence", {})
         for q in state.get("generated_queries", []):
             if q in retrieved:
@@ -69,6 +70,7 @@ def build_debater_subgraph(*, role: DebaterRole, config: AppConfig):
     compiled = builder.compile()
 
     def run_on_parent(parent: ParentState) -> ParentState:
+        # Parent orchestrates; subgraph does per-turn work and returns a projected update.
         debater_state: DebaterState = DebaterState(
             claim=parent["claim"],
             guidance=parent["guidance"],
