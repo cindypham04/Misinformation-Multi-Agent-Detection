@@ -6,7 +6,7 @@ from typing import List
 
 from dotenv import load_dotenv
 
-
+# run in the project root directory with python -m pytest -q tests/test_guided_debate_bilateral.py
 @dataclass(frozen=True)
 class AppConfig:
     tavily_api_key: str
