@@ -19,6 +19,7 @@ from misinfo_detection.subgraphs.debater import (
     _find_similar_existing_query,
     _generate_queries_for_role,
     _retrieve_evidence_for_role,
+    _search_with_retry,
 )
 
 
@@ -207,4 +208,86 @@ def test_retrieve_evidence_reuses_cached_query_results(monkeypatch):
     assert calls == ["Vaccines cause autism Reuters"]
     assert out["retrieved_evidence"][cached_query] == cached_evidence
     assert "Vaccines cause autism Reuters" in out["retrieved_evidence"]
+
+
+def test_search_with_retry_eventually_succeeds(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    config = AppConfig(
+        tavily_api_key="dummy",
+        reliable_domains=[],
+        max_rounds=1,
+        tavily_max_results=1,
+        tavily_topic="general",
+    )
+    calls = {"count": 0}
+
+    def _flaky_search(*, query: str, config: AppConfig) -> List[Evidence]:
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise RuntimeError("temporary failure")
+        return _fake_tavily_search(query=query, config=config)
+
+    monkeypatch.setattr(debater_module, "tavily_search", _flaky_search)
+
+    out = _search_with_retry(query="retry query", config=config, max_attempts=3, initial_backoff_seconds=0.0)
+    assert calls["count"] == 3
+    assert len(out) == 1
+    assert out[0]["title"] == "Title for retry query"
+
+
+def test_search_with_retry_returns_empty_after_exhausting_retries(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    config = AppConfig(
+        tavily_api_key="dummy",
+        reliable_domains=[],
+        max_rounds=1,
+        tavily_max_results=1,
+        tavily_topic="general",
+    )
+    calls = {"count": 0}
+
+    def _always_fail(*, query: str, config: AppConfig) -> List[Evidence]:
+        calls["count"] += 1
+        raise RuntimeError("network failure")
+
+    monkeypatch.setattr(debater_module, "tavily_search", _always_fail)
+
+    out = _search_with_retry(query="will fail", config=config, max_attempts=3, initial_backoff_seconds=0.0)
+    assert calls["count"] == 3
+    assert out == []
+
+
+def test_retrieve_evidence_mixed_batch_continues_after_failure(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    config = AppConfig(
+        tavily_api_key="dummy",
+        reliable_domains=[],
+        max_rounds=1,
+        tavily_max_results=1,
+        tavily_topic="general",
+    )
+
+    def _fake_search_with_retry(*, query: str, config: AppConfig, max_attempts: int = 3, initial_backoff_seconds: float = 0.2) -> List[Evidence]:
+        if "bad query" in query:
+            return []
+        return _fake_tavily_search(query=query, config=config)
+
+    monkeypatch.setattr(debater_module, "_search_with_retry", _fake_search_with_retry)
+
+    state = _state(claim="Vaccines cause autism")
+    state["generated_queries"] = [
+        "good query one",
+        "bad query two",
+        "good query three",
+    ]
+
+    out = _retrieve_evidence_for_role(state, role="negative", config=config)
+
+    assert "good query one" in out["retrieved_evidence"]
+    assert "good query three" in out["retrieved_evidence"]
+    assert out["retrieved_evidence"]["bad query two"] == []
+    assert "bad query two" not in out["evidence_pool"]
 

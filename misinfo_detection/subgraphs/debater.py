@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, TypedDict
 from urllib import error, request
@@ -247,6 +248,30 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
     return out if out else None
 
 
+def _search_with_retry(
+    *,
+    query: str,
+    config: AppConfig,
+    max_attempts: int = 3,
+    initial_backoff_seconds: float = 0.2,
+) -> List[Evidence]:
+    # Retry a small fixed number of times; if all attempts fail, return empty evidence and continue.
+    attempts = max(1, max_attempts)
+    delay_seconds = max(0.0, initial_backoff_seconds)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return tavily_search(query=query, config=config)
+        except Exception:
+            if attempt >= attempts:
+                return []
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+                delay_seconds *= 2
+
+    return []
+
+
 def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole) -> BilateralDebateState:
     claim = state["claim"]
     opponent = _opponent_argument_for_role(state, role=role)
@@ -302,8 +327,10 @@ def _retrieve_evidence_for_role(
         if q in evidence_pool:
             retrieved[q] = evidence_pool[q]
             continue
-        evidence_pool[q] = tavily_search(query=q, config=config)
-        retrieved[q] = evidence_pool[q]
+        fetched = _search_with_retry(query=q, config=config)
+        if fetched:
+            evidence_pool[q] = fetched
+        retrieved[q] = fetched
 
     state["evidence_pool"] = evidence_pool
     state["retrieved_evidence"] = retrieved

@@ -61,6 +61,17 @@ In `_retrieve_evidence_for_role(...)`, if a generated query already exists in `e
 the function now copies it into `retrieved_evidence` for the current turn (instead of skipping it
 entirely). This preserves turn-level evidence accounting without re-calling external search.
 
+## Retrieval Retry Policy
+
+New searches use `_search_with_retry(...)`:
+
+- retries Tavily calls up to a small fixed number of attempts
+- uses short exponential backoff between attempts
+- returns an empty list after all retries fail, allowing the turn to continue
+
+This keeps debate execution resilient when one query fails while still collecting evidence for
+other queries in the same turn.
+
 ## Expected Impact
 
 - Better role-aware and context-aware query generation.
