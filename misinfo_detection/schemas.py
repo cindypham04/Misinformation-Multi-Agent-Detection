@@ -11,7 +11,7 @@ class Evidence(TypedDict):
     source: str
 
 
-VerdictLabel = Literal["true", "false", "insufficient"]
+VerdictLabel = Literal["supported", "refuted", "insufficient"]
 
 
 class ParentState(TypedDict):
@@ -74,4 +74,3 @@ class VerifierState(TypedDict):
     retrieved_evidence: Dict[str, List[Evidence]]  # local, keyed by query
     verdict: Optional[VerdictLabel]
     report: Optional[str]
-
