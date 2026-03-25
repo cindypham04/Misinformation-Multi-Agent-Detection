@@ -337,17 +337,151 @@ def _retrieve_evidence_for_role(
     return state
 
 
+def _summarize_retrieved_evidence(
+    evidence_map: Dict[str, List[Evidence]],
+    *,
+    max_items: int = 6,
+    max_content_chars: int = 220,
+) -> List[Dict[str, str]]:
+    summary: List[Dict[str, str]] = []
+    for query, evidences in evidence_map.items():
+        for evidence in evidences:
+            summary.append(
+                {
+                    "query": query,
+                    "title": str(evidence.get("title", "") or ""),
+                    "url": str(evidence.get("url", "") or ""),
+                    "source": str(evidence.get("source", "") or ""),
+                    "content": str(evidence.get("content", "") or "")[:max_content_chars],
+                }
+            )
+            if len(summary) >= max_items:
+                return summary
+    return summary
+
+
+def _build_argument_prompt(
+    *,
+    role: DebaterRole,
+    claim: str,
+    guidance: str,
+    opponent_argument: Optional[str],
+    debate_log_tail: List[str],
+    evidence_summary: List[Dict[str, str]],
+) -> str:
+    role_instruction = (
+        "Argue AGAINST the claim and stress-test weak assumptions."
+        if role == "negative"
+        else "Argue FOR the claim and present the strongest support."
+    )
+    return (
+        "You are one side in a structured misinformation debate.\n"
+        f"{role_instruction}\n"
+        "Write one concise argument paragraph (4-8 sentences).\n"
+        "Use only the available evidence. If evidence is weak, acknowledge uncertainty.\n"
+        "Cite source URLs inline when used.\n"
+        "Do not invent facts.\n"
+        "Return strict JSON only with shape: {\"argument\":\"...\"}\n"
+        f"Claim: {claim}\n"
+        f"Guidance: {guidance}\n"
+        f"Latest opponent argument: {opponent_argument or 'None'}\n"
+        f"Recent debate log (most recent last): {json.dumps(debate_log_tail, ensure_ascii=True)}\n"
+        f"Retrieved evidence this turn: {json.dumps(evidence_summary, ensure_ascii=True)}\n"
+    )
+
+
+def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
+    model = os.getenv("OLLAMA_MODEL", "qwen:7b").strip() or "qwen:7b"
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    http_request = request.Request(
+        url=f"{base_url}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(http_request, timeout=45) as response:
+            raw_payload = json.loads(response.read().decode("utf-8"))
+    except (error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    response_text = str(raw_payload.get("response", "") or "").strip()
+    if not response_text:
+        return None
+
+    try:
+        parsed = json.loads(response_text)
+    except json.JSONDecodeError:
+        return None
+
+    argument = parsed.get("argument")
+    if not isinstance(argument, str):
+        return None
+    cleaned = argument.strip()
+    return cleaned or None
+
+
+def _fallback_argument_text(
+    *,
+    role: DebaterRole,
+    claim: str,
+    opponent_argument: Optional[str],
+    evidence_summary: List[Dict[str, str]],
+) -> str:
+    stance = "AGAINST" if role == "negative" else "FOR"
+    if not evidence_summary:
+        return (
+            f"I argue {stance} the claim '{claim}', but this turn returned limited evidence. "
+            "This position is provisional until stronger supporting sources are retrieved."
+        )
+
+    cited = evidence_summary[:2]
+    refs: List[str] = []
+    for item in cited:
+        title = item.get("title", "") or "untitled source"
+        url = item.get("url", "") or ""
+        refs.append(f"{title} ({url})" if url else title)
+
+    response_clause = f" In response to the opponent: {opponent_argument[:180]}." if opponent_argument else ""
+    return (
+        f"I argue {stance} the claim '{claim}' using retrieved evidence.{response_clause} "
+        f"Key references: {', '.join(refs)}."
+    )
+
+
 def _write_argument_for_role(state: BilateralDebateState, *, role: DebaterRole) -> BilateralDebateState:
     claim = state["claim"]
+    guidance = state.get("guidance", "")
     evidence = state.get("retrieved_evidence", {}) or {}
-    n_sources = sum(len(v) for v in evidence.values())
-    stance = "AGAINST" if role == "negative" else "FOR"
+    opponent = _opponent_argument_for_role(state, role=role)
+    debate_log_tail = state.get("debate_log", [])[-8:]
+    evidence_summary = _summarize_retrieved_evidence(evidence)
 
-    new_argument = (
-        f"[{role}] Stub argument {stance} the claim: '{claim}'. "
-        f"Retrieved {n_sources} evidence snippets this turn. "
-        "LLM reasoning not wired yet."
+    prompt = _build_argument_prompt(
+        role=role,
+        claim=claim,
+        guidance=guidance,
+        opponent_argument=opponent,
+        debate_log_tail=debate_log_tail,
+        evidence_summary=evidence_summary,
     )
+    generated = _call_ollama_argument_writer(prompt)
+    argument_text = generated or _fallback_argument_text(
+        role=role,
+        claim=claim,
+        opponent_argument=opponent,
+        evidence_summary=evidence_summary,
+    )
+    new_argument = f"[{role}] {argument_text.strip()}"
 
     state["debate_log"] = state.get("debate_log", []) + [new_argument]
     if role == "negative":

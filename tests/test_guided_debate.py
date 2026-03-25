@@ -14,12 +14,15 @@ from misinfo_detection.config import AppConfig
 from misinfo_detection.schemas import Evidence
 from misinfo_detection.subgraphs.debater import (
     BilateralDebateState,
+    _call_ollama_argument_writer,
     _call_ollama_query_planner,
     _fallback_queries,
+    _fallback_argument_text,
     _find_similar_existing_query,
     _generate_queries_for_role,
     _retrieve_evidence_for_role,
     _search_with_retry,
+    _write_argument_for_role,
 )
 
 
@@ -290,4 +293,68 @@ def test_retrieve_evidence_mixed_batch_continues_after_failure(monkeypatch):
     assert "good query three" in out["retrieved_evidence"]
     assert out["retrieved_evidence"]["bad query two"] == []
     assert "bad query two" not in out["evidence_pool"]
+
+
+def test_call_ollama_argument_writer_parses_valid_json(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        def read(self):
+            payload = {"response": json.dumps({"argument": "This is an LLM-generated argument."})}
+            return json.dumps(payload).encode("utf-8")
+
+    monkeypatch.setattr(debater_module.request, "urlopen", lambda _request, timeout=45: _FakeResponse())
+
+    out = _call_ollama_argument_writer("prompt")
+    assert out == "This is an LLM-generated argument."
+
+
+def test_write_argument_for_role_falls_back_when_llm_fails(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    state = _state(
+        claim="Claim X",
+        guidance="Guidance Y",
+        debate_log=["[affirmative] earlier point"],
+        latest_affirmative_argument="[affirmative] earlier point",
+    )
+
+    monkeypatch.setattr(debater_module, "_call_ollama_argument_writer", lambda prompt: None)
+
+    out = _write_argument_for_role(state, role="negative")
+    assert out["debate_log"][-1].startswith("[negative] ")
+    assert out["latest_negative_argument"] == out["debate_log"][-1]
+    assert len(out["debate_log"]) == 2
+
+
+def test_write_argument_for_role_preserves_string_debate_log_contract(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    state = _state(claim="Claim Y", guidance="Use evidence.")
+    monkeypatch.setattr(debater_module, "_call_ollama_argument_writer", lambda prompt: "LLM short answer.")
+
+    out = _write_argument_for_role(state, role="affirmative")
+
+    assert isinstance(out["debate_log"], list)
+    assert all(isinstance(turn, str) for turn in out["debate_log"])
+    assert out["debate_log"][-1].startswith("[affirmative] ")
+    assert out["latest_affirmative_argument"] == out["debate_log"][-1]
+
+
+def test_fallback_argument_text_handles_no_evidence():
+    out = _fallback_argument_text(
+        role="negative",
+        claim="The sky is green",
+        opponent_argument=None,
+        evidence_summary=[],
+    )
+    assert "AGAINST" in out
+    assert "The sky is green" in out
+    assert "limited evidence" in out.lower() or "provisional" in out.lower()
 
