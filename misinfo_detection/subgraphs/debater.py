@@ -360,6 +360,90 @@ def _summarize_retrieved_evidence(
     return summary
 
 
+_SUPPORT_CUES = (
+    "supports",
+    "supported",
+    "corroborates",
+    "linked",
+    "associated",
+    "increases risk",
+    "increase risk",
+    "causes",
+    "cause",
+    "evidence for",
+)
+
+_REFUTE_CUES = (
+    "no link",
+    "no evidence",
+    "does not",
+    "do not",
+    "not linked",
+    "not associated",
+    "debunk",
+    "debunked",
+    "fact check",
+    "false",
+    "refute",
+    "refuted",
+    "reaffirms no",
+)
+
+
+def _evidence_alignment_score(item: Dict[str, str]) -> int:
+    haystack = " ".join(
+        [
+            item.get("query", "") or "",
+            item.get("title", "") or "",
+            item.get("content", "") or "",
+            item.get("source", "") or "",
+        ]
+    ).lower()
+    support = sum(haystack.count(cue) for cue in _SUPPORT_CUES)
+    refute = sum(haystack.count(cue) for cue in _REFUTE_CUES)
+    return support - refute
+
+
+def _select_evidence_for_role(
+    *,
+    role: DebaterRole,
+    evidence_summary: List[Dict[str, str]],
+) -> tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    aligned: List[Dict[str, str]] = []
+    conflicting: List[Dict[str, str]] = []
+
+    for item in evidence_summary:
+        score = _evidence_alignment_score(item)
+        if role == "affirmative":
+            if score > 0:
+                aligned.append(item)
+            elif score < 0:
+                conflicting.append(item)
+        else:
+            if score < 0:
+                aligned.append(item)
+            elif score > 0:
+                conflicting.append(item)
+
+    return aligned, conflicting
+
+
+def _compact_opponent_argument(opponent_argument: Optional[str], *, max_chars: int = 120) -> str:
+    if not opponent_argument:
+        return ""
+
+    text = opponent_argument.strip()
+    text = re.sub(r"^\[(negative|affirmative)\]\s*", "", text)
+    text = re.sub(r"In response to the opponent:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Key references:.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+
+    if len(text) > max_chars:
+        text = text[: max_chars - 3].rstrip() + "..."
+    return text
+
+
 def _build_argument_prompt(
     *,
     role: DebaterRole,
@@ -444,16 +528,29 @@ def _fallback_argument_text(
             "This position is provisional until stronger supporting sources are retrieved."
         )
 
-    cited = evidence_summary[:2]
+    aligned, conflicting = _select_evidence_for_role(role=role, evidence_summary=evidence_summary)
+    cited = (aligned or conflicting or evidence_summary)[:2]
     refs: List[str] = []
     for item in cited:
         title = item.get("title", "") or "untitled source"
         url = item.get("url", "") or ""
         refs.append(f"{title} ({url})" if url else title)
 
-    response_clause = f" In response to the opponent: {opponent_argument[:180]}." if opponent_argument else ""
+    response_excerpt = _compact_opponent_argument(opponent_argument)
+    response_clause = f" In response to the opponent: {response_excerpt}." if response_excerpt else ""
+
+    if aligned:
+        return (
+            f"I argue {stance} the claim '{claim}' using evidence that aligns with this stance.{response_clause} "
+            f"Key references: {', '.join(refs)}."
+        )
+    if conflicting:
+        return (
+            f"I argue {stance} the claim '{claim}', but the sources retrieved this turn do not substantiate this stance and mostly point the other way.{response_clause} "
+            f"Key references: {', '.join(refs)}."
+        )
     return (
-        f"I argue {stance} the claim '{claim}' using retrieved evidence.{response_clause} "
+        f"I argue {stance} the claim '{claim}', but the retrieved sources remain ambiguous for this stance.{response_clause} "
         f"Key references: {', '.join(refs)}."
     )
 
@@ -563,4 +660,3 @@ def build_debater_subgraph(*, config: AppConfig):
         return parent
 
     return run_on_parent
-

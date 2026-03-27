@@ -43,6 +43,11 @@ def _clean_advice_line(text: str) -> str:
     return text
 
 
+def _count_role_mentions(items: list[str], role: str) -> int:
+    needle = f"[{role.lower()}]"
+    return sum(1 for item in items if needle in item.lower())
+
+
 def _build_advice_queries(claim: str, advice: str) -> list[str]:
     sections = [
         "Highest-priority valid points:",
@@ -176,31 +181,46 @@ def _fallback_verdict(state: VerifierState) -> tuple[VerdictLabel, str]:
     shared_evidence = state.get("evidence_pool", {})
     n_new = sum(len(v) for v in verifier_evidence.values())
     n_shared = sum(len(v) for v in shared_evidence.values())
+    valid_points = _extract_advice_section(advice, "Highest-priority valid points:")
+    unresolved_points = _extract_advice_section(advice, "Remaining gaps to resolve:")
+    scrutiny_points = _extract_advice_section(advice, "Assertions that need stronger scrutiny:")
+    noisy_points = _extract_advice_section(advice, "Low-value or noisy points to discount:")
 
-    negative_cues = ("refute", "contradict", "false", "unsupported", "logical leap", "stronger scrutiny")
-    affirmative_cues = ("valid points", "evidence-backed", "supported", "corroborates")
+    negative_score = 0
+    affirmative_score = 0
 
-    negative_score = sum(advice.lower().count(cue) for cue in negative_cues)
-    affirmative_score = sum(advice.lower().count(cue) for cue in affirmative_cues)
+    negative_score += 2 * _count_role_mentions(valid_points, "negative")
+    affirmative_score += 2 * _count_role_mentions(valid_points, "affirmative")
+
+    negative_score += _count_role_mentions(unresolved_points, "affirmative")
+    affirmative_score += _count_role_mentions(unresolved_points, "negative")
+
+    negative_score += 2 * _count_role_mentions(scrutiny_points, "affirmative")
+    affirmative_score += 2 * _count_role_mentions(scrutiny_points, "negative")
+
+    negative_score += _count_role_mentions(noisy_points, "affirmative")
+    affirmative_score += _count_role_mentions(noisy_points, "negative")
 
     if n_new == 0 and n_shared == 0:
         verdict: VerdictLabel = "insufficient"
         reason = "No evidence was available to support or refute the claim."
-    elif negative_score > affirmative_score + 1:
+    elif negative_score > affirmative_score:
         verdict = "refuted"
-        reason = "The advisor guidance emphasized unresolved or weak arguments more than supported ones."
+        reason = "The advisor guidance favored the negative case more strongly than the affirmative case."
     elif affirmative_score > negative_score and (n_new + n_shared) > 0:
         verdict = "supported"
-        reason = "The available evidence and advisor guidance leaned more toward supported arguments."
+        reason = "The advisor guidance favored the affirmative case more strongly than the negative case."
     else:
         verdict = "insufficient"
-        reason = "The available evidence remained mixed or too limited for a confident decision."
+        reason = "The available evidence remained mixed or the debate signal was too balanced for a confident decision."
 
     report = (
         "Verifier report.\n"
         f"- Claim: {claim}\n"
         f"- Shared evidence snippets: {n_shared}\n"
         f"- New verifier evidence snippets: {n_new}\n"
+        f"- Negative score: {negative_score}\n"
+        f"- Affirmative score: {affirmative_score}\n"
         f"- Verdict: {verdict}\n"
         f"- Rationale: {reason}\n"
         "- Decision source: heuristic fallback\n"
