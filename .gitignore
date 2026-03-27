@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.classevaluation/results/
+
+environment.yml
+logs/
