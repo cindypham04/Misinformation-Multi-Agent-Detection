@@ -16,6 +16,7 @@ from misinfo_detection.subgraphs.debater import (
     BilateralDebateState,
     _call_ollama_argument_writer,
     _call_ollama_query_planner,
+    _compact_opponent_argument,
     _fallback_queries,
     _fallback_argument_text,
     _find_similar_existing_query,
@@ -358,3 +359,55 @@ def test_fallback_argument_text_handles_no_evidence():
     assert "The sky is green" in out
     assert "limited evidence" in out.lower() or "provisional" in out.lower()
 
+
+def test_fallback_argument_text_includes_evidence_snippets_and_multiple_references():
+    evidence_summary = [
+        {
+            "title": "Source A",
+            "url": "https://example.com/a",
+            "source": "mock",
+            "query": "claim source a",
+            "content": "Source A says the concentration of wealth among the top 1% exceeds the bottom 50% in aggregate.",
+        },
+        {
+            "title": "Source B",
+            "url": "https://example.com/b",
+            "source": "mock",
+            "query": "claim source b",
+            "content": "Source B reports long-term wealth shares and gives historical context for the imbalance.",
+        },
+        {
+            "title": "Source C",
+            "url": "https://example.com/c",
+            "source": "mock",
+            "query": "claim source c",
+            "content": "Source C provides a survey-based estimate supporting the same conclusion.",
+        },
+    ]
+
+    out = _fallback_argument_text(
+        role="affirmative",
+        claim="The top 1% in the US hold more wealth than the bottom 50% combined.",
+        opponent_argument=None,
+        evidence_summary=evidence_summary,
+    )
+
+    assert "Evidence observed this turn:" in out
+    assert "Source A says the concentration of wealth" in out
+    assert "Source B reports long-term wealth shares" in out
+    assert "https://example.com/a" in out
+    assert "https://example.com/b" in out
+
+
+def test_compact_opponent_argument_keeps_full_text_without_ellipsis():
+    opponent = (
+        "[affirmative] I argue FOR the claim 'Claim Y' using evidence that aligns with this stance. "
+        "In response to the opponent: This is a longer reply that used to be truncated. "
+        "It should remain fully visible in the stored debate turn now."
+    )
+
+    out = _compact_opponent_argument(opponent)
+
+    assert "..." not in out
+    assert "used to be truncated" in out
+    assert "remain fully visible" in out

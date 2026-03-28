@@ -428,7 +428,7 @@ def _select_evidence_for_role(
     return aligned, conflicting
 
 
-def _compact_opponent_argument(opponent_argument: Optional[str], *, max_chars: int = 120) -> str:
+def _compact_opponent_argument(opponent_argument: Optional[str]) -> str:
     if not opponent_argument:
         return ""
 
@@ -438,9 +438,6 @@ def _compact_opponent_argument(opponent_argument: Optional[str], *, max_chars: i
     text = re.sub(r"Key references:.*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"\s+", " ", text).strip(" .")
-
-    if len(text) > max_chars:
-        text = text[: max_chars - 3].rstrip() + "..."
     return text
 
 
@@ -529,28 +526,38 @@ def _fallback_argument_text(
         )
 
     aligned, conflicting = _select_evidence_for_role(role=role, evidence_summary=evidence_summary)
-    cited = (aligned or conflicting or evidence_summary)[:2]
+    cited = (aligned or conflicting or evidence_summary)[:4]
     refs: List[str] = []
+    evidence_points: List[str] = []
     for item in cited:
         title = item.get("title", "") or "untitled source"
         url = item.get("url", "") or ""
+        content = re.sub(r"\s+", " ", str(item.get("content", "") or "")).strip()
         refs.append(f"{title} ({url})" if url else title)
+        if content:
+            snippet = content[:180].rstrip()
+            evidence_points.append(f"{title}: {snippet}")
 
     response_excerpt = _compact_opponent_argument(opponent_argument)
     response_clause = f" In response to the opponent: {response_excerpt}." if response_excerpt else ""
+    evidence_clause = (
+        f" Evidence observed this turn: {'; '.join(evidence_points)}."
+        if evidence_points
+        else ""
+    )
 
     if aligned:
         return (
-            f"I argue {stance} the claim '{claim}' using evidence that aligns with this stance.{response_clause} "
+            f"I argue {stance} the claim '{claim}' using evidence that aligns with this stance.{response_clause}{evidence_clause} "
             f"Key references: {', '.join(refs)}."
         )
     if conflicting:
         return (
-            f"I argue {stance} the claim '{claim}', but the sources retrieved this turn do not substantiate this stance and mostly point the other way.{response_clause} "
+            f"I argue {stance} the claim '{claim}', but the sources retrieved this turn do not substantiate this stance and mostly point the other way.{response_clause}{evidence_clause} "
             f"Key references: {', '.join(refs)}."
         )
     return (
-        f"I argue {stance} the claim '{claim}', but the retrieved sources remain ambiguous for this stance.{response_clause} "
+        f"I argue {stance} the claim '{claim}', but the retrieved sources remain ambiguous for this stance.{response_clause}{evidence_clause} "
         f"Key references: {', '.join(refs)}."
     )
 
