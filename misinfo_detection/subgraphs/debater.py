@@ -156,12 +156,14 @@ def _find_similar_existing_query(
     return best_match
 
 
-def _fallback_queries(*, claim: str, opponent_argument: Optional[str]) -> List[str]:
-    queries: List[str] = []
-    if opponent_argument:
-        queries.append(f"{claim} fact check {opponent_argument[:100]}")
-    queries.extend([f"{claim} fact check", f"{claim} evidence", f"{claim} Reuters", f"{claim} AP News"])
-    return _dedupe_preserve_order([q.strip() for q in queries if q.strip()])
+def _fallback_queries(*, claim: str) -> List[str]:
+    return _dedupe_preserve_order([
+        f"{claim} rebuttal evidence",
+        f"{claim} fact check",
+        f"{claim} evidence",
+        f"{claim} Reuters",
+        f"{claim} AP News",
+    ])
 
 
 def _build_query_planner_prompt(
@@ -201,16 +203,32 @@ def _build_query_planner_prompt(
 
 
 def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
+    def _debug(message: str, data: object = None) -> None:
+        if os.getenv("DEBUG_DEBATER_QUERY_PLANNER", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            print("DEBUG_DEBATER_QUERY_PLANNER is not set")
+            return
+        if data is None:
+            print(f"[query-planner] {message}")
+            return
+        try:
+            print(f"[query-planner] {message}: {json.dumps(data, ensure_ascii=True, default=str)}")
+        except Exception:
+            print(f"[query-planner] {message}: {data}")
+
     model = os.getenv("OLLAMA_MODEL", "qwen:7b").strip() or "qwen:7b"
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    _debug("start", {"model": model, "base_url": base_url, "prompt_len": len(prompt)})
 
+    # This build the payload for the LLM call 
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
         "format": "json",
     }
+    # This converts the payload to a JSON string and encodes it to UTF-8
     body = json.dumps(payload).encode("utf-8")
+    # This creates the HTTP request to the LLM API
     http_request = request.Request(
         url=f"{base_url}/api/generate",
         data=body,
@@ -218,33 +236,41 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
         method="POST",
     )
 
+    # This makes the HTTP request to the LLM API and reads the response
     try:
-        with request.urlopen(http_request, timeout=30) as response:
+        # This opens the HTTP request and reads the response
+        with request.urlopen(http_request, timeout=100) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
-    except (error.URLError, TimeoutError, json.JSONDecodeError):
+    except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        _debug("request failed", {"error_type": type(exc).__name__, "error": str(exc)})
         return None
 
     response_text = str(raw_payload.get("response", "") or "").strip()
     if not response_text:
+        _debug("empty response text")
         return None
 
     try:
         parsed = json.loads(response_text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        _debug("response json parse failed", {"error": str(exc), "response_preview": response_text[:200]})
         return None
 
     queries = parsed.get("queries")
     if not isinstance(queries, list):
+        _debug("missing or non-list queries", {"parsed_keys": list(parsed.keys()) if isinstance(parsed, dict) else []})
         return None
 
     out: List[str] = []
     for candidate in queries:
         if not isinstance(candidate, str):
+            _debug("dropped non-string query", {"value": str(candidate)})
             continue
         cleaned = candidate.strip()
         if cleaned:
             out.append(cleaned)
     out = _dedupe_preserve_order(out)
+    _debug("cleaned llm queries", out)
     return out if out else None
 
 
@@ -271,12 +297,16 @@ def _search_with_retry(
 
     return []
 
-
+# Main function to debug right now
 def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole) -> BilateralDebateState:
     claim = state["claim"]
+    # This returns the latest argument from the other role
     opponent = _opponent_argument_for_role(state, role=role)
+    # This is the guidance from the parent state
     guidance = state.get("guidance", "")
+    # This is the last 8 messages from the debate log
     debate_log_tail = state.get("debate_log", [])[-8:]
+
     existing_queries = list(state.get("evidence_pool", {}).keys())
 
     prompt = _build_query_planner_prompt(
@@ -287,11 +317,12 @@ def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole
         debate_log_tail=debate_log_tail,
         existing_queries=existing_queries,
     )
-    llm_queries = _call_ollama_query_planner(prompt)
-    fallback_queries = _fallback_queries(claim=claim, opponent_argument=opponent)
-    raw_candidates = llm_queries if llm_queries else fallback_queries
 
+    llm_queries = _call_ollama_query_planner(prompt)
+    fallback_queries = _fallback_queries(claim=claim)
+    raw_candidates = llm_queries if llm_queries else fallback_queries
     canonicalized: List[str] = []
+
     for query in raw_candidates:
         cleaned = query.strip()
         if not cleaned:
@@ -300,8 +331,7 @@ def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole
         canonicalized.append(similar if similar else cleaned)
 
     final_queries = _dedupe_preserve_order(canonicalized)
-
-    # Keep small and deterministic while guaranteeing useful fallback coverage.
+    # Backfill only when LLM relevant candidates are insufficient.
     if len(final_queries) < 3:
         for query in fallback_queries:
             similar = _find_similar_existing_query(query, existing_queries)
