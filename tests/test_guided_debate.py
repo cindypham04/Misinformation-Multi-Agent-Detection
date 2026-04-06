@@ -115,7 +115,8 @@ def test_fallback_queries_include_claim_and_sources():
     assert f"{claim} evidence" in queries
     assert f"{claim} Reuters" in queries
     assert f"{claim} AP News" in queries
-    assert any(q.startswith(f"{claim} fact check ") for q in queries)
+    assert f"{claim} rebuttal evidence" in queries
+    assert all("study X" not in q for q in queries)
 
 
 def test_find_similar_existing_query_matches_semantic_duplicate():
@@ -158,6 +159,46 @@ def test_generate_queries_for_role_uses_llm_output_and_reuses_existing(monkeypat
     assert "Vaccines cause autism Reuters" in out["generated_queries"]
     assert "vaccines cause autism CDC statement" in out["generated_queries"]
     assert len(out["generated_queries"]) <= 5
+
+
+def test_generate_queries_for_role_filters_off_topic_llm_queries(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    monkeypatch.setattr(
+        debater_module,
+        "_call_ollama_query_planner",
+        lambda prompt: [
+            "latest celebrity vaccine controversy",
+            "Vaccines cause autism Reuters",
+            "Vaccines autism CDC fact check",
+        ],
+    )
+
+    state = _state(
+        claim="Vaccines cause autism",
+        evidence_pool={},
+    )
+
+    out = _generate_queries_for_role(state, role="negative")
+    assert "latest celebrity vaccine controversy" not in out["generated_queries"]
+    assert "Vaccines cause autism Reuters" in out["generated_queries"]
+
+
+def test_generate_queries_for_role_backfills_when_llm_relevant_queries_insufficient(monkeypatch):
+    import misinfo_detection.subgraphs.debater as debater_module
+
+    monkeypatch.setattr(
+        debater_module,
+        "_call_ollama_query_planner",
+        lambda prompt: ["Vaccines autism CDC fact check"],
+    )
+
+    state = _state(claim="Vaccines cause autism")
+    out = _generate_queries_for_role(state, role="negative")
+
+    assert "Vaccines autism CDC fact check" in out["generated_queries"]
+    assert f"{state['claim']} evidence" in out["generated_queries"]
+    assert len(out["generated_queries"]) >= 3
 
 
 def test_generate_queries_for_role_falls_back_when_llm_unavailable(monkeypatch):
