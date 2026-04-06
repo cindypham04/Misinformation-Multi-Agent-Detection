@@ -37,6 +37,7 @@ class BilateralDebateState(TypedDict):
     retrieved_evidence: Dict[str, List[Evidence]]  # evidence retrieved during this role turn
 
 def _opponent_argument_for_role(state: BilateralDebateState, *, role: DebaterRole) -> Optional[str]:
+    # returns the opponent argument
     return state["latest_affirmative_argument"] if role == "negative" else state["latest_negative_argument"]
 
 
@@ -273,7 +274,7 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
     _debug("cleaned llm queries", out)
     return out if out else None
 
-
+# function to debug right now
 def _search_with_retry(
     *,
     query: str,
@@ -282,6 +283,9 @@ def _search_with_retry(
     initial_backoff_seconds: float = 0.2,
 ) -> List[Evidence]:
     # Retry a small fixed number of times; if all attempts fail, return empty evidence and continue.
+    print("Searching for query:")
+    print(query)
+    print("--------------------------------")
     attempts = max(1, max_attempts)
     delay_seconds = max(0.0, initial_backoff_seconds)
 
@@ -334,13 +338,16 @@ def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole
     # Backfill only when LLM relevant candidates are insufficient.
     if len(final_queries) < 3:
         for query in fallback_queries:
+            # Check if the query is similar to any existing queries
+            # If it is, add it to the final queries
+            # If it is not, add it to the final queries
             similar = _find_similar_existing_query(query, existing_queries)
             final_queries.append(similar if similar else query)
+        # Deduplicate the final queries
         final_queries = _dedupe_preserve_order(final_queries)
-
+    # Cap the final queries at 5
     state["generated_queries"] = final_queries[:5]
     return state
-
 
 def _retrieve_evidence_for_role(
     state: BilateralDebateState,
@@ -351,17 +358,35 @@ def _retrieve_evidence_for_role(
     # Retrieval updates the shared evidence_pool inside the subgraph, so negative and affirmative steps
     # share one view of what was already retrieved.
     evidence_pool = state.get("evidence_pool", {})
+    print("Evidence Pool:")
+    print(evidence_pool)
+    print("--------------------------------")
+    print("Generated Queries:")
+    print(state.get("generated_queries", []))
+    print("--------------------------------")
     retrieved: Dict[str, List[Evidence]] = {}
-
+    print("Retrieved:")
+    print(retrieved)
+    print("--------------------------------")
+    # For each query in the generated queries, check if it is in the evidence pool
+    # If it is, add it to the retrieved evidence
+    # If it is not, search for it and add it to the evidence pool and retrieved evidence
     for q in state.get("generated_queries", []):
         if q in evidence_pool:
             retrieved[q] = evidence_pool[q]
             continue
+        # main function to search for the query
+        # This function will retry the search up to 3 times with a small fixed number of attempts
+        # If all attempts fail, it will return an empty list
+        # If the search is successful, it will return the evidence
+        # The evidence is a list of dictionaries, each containing the title, url, source, and content of the evidence
         fetched = _search_with_retry(query=q, config=config)
         if fetched:
+            print("Fetched:")
+            print(fetched)
+            print("--------------------------------")
             evidence_pool[q] = fetched
         retrieved[q] = fetched
-
     state["evidence_pool"] = evidence_pool
     state["retrieved_evidence"] = retrieved
     return state
@@ -599,8 +624,10 @@ def _write_argument_for_role(state: BilateralDebateState, *, role: DebaterRole) 
     claim = state["claim"]
     guidance = state.get("guidance", "")
     evidence = state.get("retrieved_evidence", {}) or {}
+    # this just grabs the opponent's last argument
     opponent = _opponent_argument_for_role(state, role=role)
     debate_log_tail = state.get("debate_log", [])[-8:]
+    # this provides the high-level summary of the retrieved evidence like titles, urls, and content summary
     evidence_summary = _summarize_retrieved_evidence(evidence)
 
     prompt = _build_argument_prompt(
@@ -611,6 +638,8 @@ def _write_argument_for_role(state: BilateralDebateState, *, role: DebaterRole) 
         debate_log_tail=debate_log_tail,
         evidence_summary=evidence_summary,
     )
+    # this calls the LLM to generate the argument
+    # TODO: currently not working
     generated = _call_ollama_argument_writer(prompt)
     argument_text = generated or _fallback_argument_text(
         role=role,
