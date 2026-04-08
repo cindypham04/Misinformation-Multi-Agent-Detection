@@ -219,7 +219,7 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=30) as response:
+        with request.urlopen(http_request, timeout=100) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
@@ -490,7 +490,7 @@ def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=45) as response:
+        with request.urlopen(http_request, timeout=100) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
