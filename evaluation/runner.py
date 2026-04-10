@@ -57,26 +57,26 @@ def append_checkpoint(path: str, result: RawResult) -> None:
     with open(path, "a") as f:
         f.write(json.dumps(result) + "\n")
 
-def run_single_claim_timed(
-    claim: str,
-    timeout_seconds: int,
-) -> tuple:
+def run_single_claim_timed(claim: str, timeout_seconds: int) -> tuple:
     start = time.time()
     timed_out = False
     error = None
     state = None
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(run_claim, claim)
-        try:
-            state = future.result(timeout=timeout_seconds)
-        except TimeoutError:
-            timed_out = True
-        except Exception as e:
-            error = str(e)
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(run_claim, claim)
+    try:
+        state = future.result(timeout=timeout_seconds)
+    except TimeoutError:
+        timed_out = True
+    except Exception as e:
+        error = str(e)
+    finally:
+        executor.shutdown(wait=False)
 
     elapsed = time.time() - start
     return state, elapsed, timed_out, error
+
 
 def build_raw_result(
     claim_id: int,

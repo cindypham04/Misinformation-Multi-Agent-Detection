@@ -219,7 +219,7 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=100) as response:
+        with request.urlopen(http_request, timeout=30) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
@@ -459,14 +459,17 @@ def _build_argument_prompt(
         "You are one side in a structured misinformation debate.\n"
         f"{role_instruction}\n"
         "Write one concise argument paragraph (4-8 sentences).\n"
-        "Use only the available evidence. If evidence is weak, acknowledge uncertainty.\n"
+        "Use only the available evidence.\n"
+        "You MUST maintain your assigned stance throughout your argument.\n"
+        "If evidence contradicts your position, argue that it is insufficient, biased, or that alternative interpretations exist.\n"
+        "Never switch sides or argue against your assigned position — that is your opponent's job.\n"
         "Cite source URLs inline when used.\n"
         "Do not invent facts.\n"
         "Return strict JSON only with shape: {\"argument\":\"...\"}\n"
         f"Claim: {claim}\n"
         f"Guidance: {guidance}\n"
-        f"Latest opponent argument: {opponent_argument or 'None'}\n"
-        f"Recent debate log (most recent last): {json.dumps(debate_log_tail, ensure_ascii=True)}\n"
+        f"Latest opponent argument: {_compact_opponent_argument(opponent_argument)[:300] or 'None'}\n"
+        f"Recent debate log (most recent last): {json.dumps([e[:200] for e in debate_log_tail], ensure_ascii=True)}\n"
         f"Retrieved evidence this turn: {json.dumps(evidence_summary, ensure_ascii=True)}\n"
     )
 
@@ -490,7 +493,7 @@ def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=100) as response:
+        with request.urlopen(http_request, timeout=60) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
