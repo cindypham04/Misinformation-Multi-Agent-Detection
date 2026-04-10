@@ -108,8 +108,7 @@ def test_call_ollama_query_planner_returns_none_on_invalid_response(monkeypatch)
 
 def test_fallback_queries_include_claim_and_sources():
     claim = "The sky is green"
-    opponent = "[affirmative] It is proven by study X"
-    queries = _fallback_queries(claim=claim, opponent_argument=opponent)
+    queries = _fallback_queries(claim=claim)
 
     assert len(queries) >= 4
     assert f"{claim} fact check" in queries
@@ -158,8 +157,7 @@ def test_generate_queries_for_role_uses_llm_output_and_reuses_existing(monkeypat
 
     assert "Vaccines cause autism fact check" in out["generated_queries"]
     assert "Vaccines cause autism Reuters" in out["generated_queries"]
-    assert "vaccines cause autism CDC statement" in out["generated_queries"]
-    assert len(out["generated_queries"]) <= 5
+    assert len(out["generated_queries"]) == 2
 
 
 def test_generate_queries_for_role_filters_off_topic_llm_queries(monkeypatch):
@@ -169,9 +167,9 @@ def test_generate_queries_for_role_filters_off_topic_llm_queries(monkeypatch):
         debater_module,
         "_call_ollama_query_planner",
         lambda prompt: [
-            "latest celebrity vaccine controversy",
             "Vaccines cause autism Reuters",
             "Vaccines autism CDC fact check",
+            "latest celebrity vaccine controversy",
         ],
     )
 
@@ -183,6 +181,8 @@ def test_generate_queries_for_role_filters_off_topic_llm_queries(monkeypatch):
     out = _generate_queries_for_role(state, role="negative")
     assert "latest celebrity vaccine controversy" not in out["generated_queries"]
     assert "Vaccines cause autism Reuters" in out["generated_queries"]
+    assert "Vaccines autism CDC fact check" in out["generated_queries"]
+    assert len(out["generated_queries"]) == 2
 
 
 def test_generate_queries_for_role_backfills_when_llm_relevant_queries_insufficient(monkeypatch):
@@ -198,8 +198,8 @@ def test_generate_queries_for_role_backfills_when_llm_relevant_queries_insuffici
     out = _generate_queries_for_role(state, role="negative")
 
     assert "Vaccines autism CDC fact check" in out["generated_queries"]
-    assert f"{state['claim']} evidence" in out["generated_queries"]
-    assert len(out["generated_queries"]) >= 3
+    assert f"{state['claim']} rebuttal evidence" in out["generated_queries"]
+    assert len(out["generated_queries"]) == 2
 
 
 def test_generate_queries_for_role_falls_back_when_llm_unavailable(monkeypatch):
@@ -214,10 +214,11 @@ def test_generate_queries_for_role_falls_back_when_llm_unavailable(monkeypatch):
 
     out = _generate_queries_for_role(state, role="negative")
 
-    assert f"{state['claim']} evidence" in out["generated_queries"]
-    assert f"{state['claim']} Reuters" in out["generated_queries"]
-    assert f"{state['claim']} AP News" in out["generated_queries"]
-    assert any(q.startswith(f"{state['claim']} fact check") for q in out["generated_queries"])
+    assert len(out["generated_queries"]) == 2
+    assert out["generated_queries"] == [
+        f"{state['claim']} rebuttal evidence",
+        f"{state['claim']} fact check",
+    ]
 
 
 def test_retrieve_evidence_reuses_cached_query_results(monkeypatch):
@@ -332,7 +333,7 @@ def test_retrieve_evidence_mixed_batch_continues_after_failure(monkeypatch):
     out = _retrieve_evidence_for_role(state, role="negative", config=config)
 
     assert "good query one" in out["retrieved_evidence"]
-    assert "good query three" in out["retrieved_evidence"]
+    assert "good query three" not in out["retrieved_evidence"]
     assert out["retrieved_evidence"]["bad query two"] == []
     assert "bad query two" not in out["evidence_pool"]
 

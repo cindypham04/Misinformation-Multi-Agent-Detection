@@ -85,6 +85,8 @@ _QUERY_STOPWORDS = {
     "evidence",
 }
 
+_MAX_SEARCH_QUERIES = 2
+
 
 def _normalize_query_text(text: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", text.lower())
@@ -187,7 +189,7 @@ def _build_query_planner_prompt(
         "Focus on factual verification, source quality, and unresolved points.\n"
         "Avoid duplicate intent with already-searched queries unless necessary.\n"
         "Return strict JSON only with this shape:\n"
-        '{"queries":["q1","q2","q3"]}\n'
+        '{"queries":["q1","q2"]}\n'
         f"Role: {role}\n"
         f"Role objective: {role_goal}\n"
         f"Claim: {claim}\n"
@@ -196,7 +198,7 @@ def _build_query_planner_prompt(
         f"Recent debate log (most recent last): {json.dumps(debate_log_tail, ensure_ascii=True)}\n"
         f"Existing evidence queries already searched: {json.dumps(existing_queries, ensure_ascii=True)}\n"
         "Rules:\n"
-        "- Produce 3 to 5 queries.\n"
+        "- Produce exactly 2 queries.\n"
         "- Keep each query short and directly searchable.\n"
         "- Include at least one source-targeted query when useful (Reuters/AP/BBC/CDC/WHO/etc).\n"
         "- Output valid JSON only. No markdown. No extra keys.\n"
@@ -270,7 +272,7 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
         cleaned = candidate.strip()
         if cleaned:
             out.append(cleaned)
-    out = _dedupe_preserve_order(out)
+    out = _dedupe_preserve_order(out)[:_MAX_SEARCH_QUERIES]
     _debug("cleaned llm queries", out)
     return out if out else None
 
@@ -336,7 +338,7 @@ def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole
 
     final_queries = _dedupe_preserve_order(canonicalized)
     # Backfill only when LLM relevant candidates are insufficient.
-    if len(final_queries) < 3:
+    if len(final_queries) < _MAX_SEARCH_QUERIES:
         for query in fallback_queries:
             # Check if the query is similar to any existing queries
             # If it is, add it to the final queries
@@ -345,8 +347,7 @@ def _generate_queries_for_role(state: BilateralDebateState, *, role: DebaterRole
             final_queries.append(similar if similar else query)
         # Deduplicate the final queries
         final_queries = _dedupe_preserve_order(final_queries)
-    # Cap the final queries at 5
-    state["generated_queries"] = final_queries[:5]
+    state["generated_queries"] = final_queries[:_MAX_SEARCH_QUERIES]
     return state
 
 def _retrieve_evidence_for_role(
@@ -371,7 +372,7 @@ def _retrieve_evidence_for_role(
     # For each query in the generated queries, check if it is in the evidence pool
     # If it is, add it to the retrieved evidence
     # If it is not, search for it and add it to the evidence pool and retrieved evidence
-    for q in state.get("generated_queries", []):
+    for q in state.get("generated_queries", [])[:_MAX_SEARCH_QUERIES]:
         if q in evidence_pool:
             retrieved[q] = evidence_pool[q]
             continue
@@ -506,29 +507,32 @@ def _build_argument_prompt(
     evidence_summary: List[Dict[str, str]],
 ) -> str:
     role_instruction = (
-        "Argue AGAINST the claim and stress-test weak assumptions."
+        "You are a debating AGAINST the claim. Your job is to argue that the claim is false."
         if role == "negative"
-        else "Argue FOR the claim and present the strongest support."
+        else "You are debating FOR the claim. Your job is to argue that the claim is true."
     )
     return (
-        "You are one side in a structured misinformation debate.\n"
-        f"{role_instruction}\n"
-        "Write one concise argument paragraph (4-8 sentences).\n"
-        "Use only the available evidence.\n"
-        "You MUST maintain your assigned stance throughout your argument.\n"
-        "If evidence contradicts your position, argue that it is insufficient, biased, or that alternative interpretations exist.\n"
-        "Never switch sides or argue against your assigned position — that is your opponent's job.\n"
-        "Cite source URLs inline when used.\n"
-        "Do not invent facts.\n"
-        "Return strict JSON only with shape: {\"argument\":\"...\"}\n"
+        "You are a debate agent in a structured misinformation debate.\n"
+        f"Your role: {role_instruction}\n"
+
+        "Remain faithful to your assigned side in this round.\n"
+        "Your job is to make the strongest evidence-grounded case for your side and rebut the opposing side.\n"
+        "If evidence is incomplete, do NOT concede.\n"
+
+        "Instead, use the uncertainty strategically:\n"
+        "- highlight missing support, ambiguity, or contradictions in the opposing argument,\n"
+        "- emphasize the evidence that still favors your side,\n"
+        "- focus only on key claim-relevant points.\n"
+        
+        "Your argument should be in JSON format.\n"
+        "The JSON format should be like this:\n"
+        '{"argument": "Your argument here"}\n'
         f"Claim: {claim}\n"
         f"Guidance: {guidance}\n"
         f"Latest opponent argument: {_compact_opponent_argument(opponent_argument)[:300] or 'None'}\n"
         f"Recent debate log (most recent last): {json.dumps([e[:200] for e in debate_log_tail], ensure_ascii=True)}\n"
         f"Retrieved evidence this turn: {json.dumps(evidence_summary, ensure_ascii=True)}\n"
     )
-
-
 def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
     model = os.getenv("OLLAMA_MODEL", "qwen:7b").strip() or "qwen:7b"
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -548,9 +552,12 @@ def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=60) as response:
+        with request.urlopen(http_request, timeout=200) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
-    except (error.URLError, TimeoutError, json.JSONDecodeError):
+    except (error.URLError, TimeoutError, json.JSONDecodeError)  as e:
+        print("Error:")
+        print(e)
+        print("--------------------------------")
         return None
 
     response_text = str(raw_payload.get("response", "") or "").strip()
