@@ -325,6 +325,7 @@ def advisor_analyze(state: AdvisorState) -> AdvisorState:
         debate_log=state.get("debate_log", []),
         evidence_pool=evidence_pool,
     )
+    state["analysis_data"] = analysis_data
     parsed_turns = analysis_data["parsed_turns"]
     grouped_turns = analysis_data["grouped_turns"]
     negative_turns = [turn["content"] for turn in grouped_turns["negative"]]
@@ -372,7 +373,7 @@ def advisor_analyze(state: AdvisorState) -> AdvisorState:
 
 def advisor_advice(state: AdvisorState) -> AdvisorState:
     claim = state["claim"]
-    analysis_data = _compute_analysis_data(
+    analysis_data = state.get("analysis_data") or _compute_analysis_data(
         claim=claim,
         debate_log=state.get("debate_log", []),
         evidence_pool=state.get("evidence_pool", {}),
@@ -434,6 +435,7 @@ def build_advisor_subgraph():
             evidence_pool=dict(parent.get("evidence_pool", {})),
             analysis=None,
             advice=None,
+            analysis_data=None,
         )
 
         out: AdvisorState = compiled.invoke(advisor_state)

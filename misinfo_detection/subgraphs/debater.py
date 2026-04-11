@@ -360,6 +360,87 @@ def _summarize_retrieved_evidence(
     return summary
 
 
+_SUPPORT_CUES = (
+    "supports",
+    "supported",
+    "corroborates",
+    "linked",
+    "associated",
+    "increases risk",
+    "increase risk",
+    "causes",
+    "cause",
+    "evidence for",
+)
+
+_REFUTE_CUES = (
+    "no link",
+    "no evidence",
+    "does not",
+    "do not",
+    "not linked",
+    "not associated",
+    "debunk",
+    "debunked",
+    "fact check",
+    "false",
+    "refute",
+    "refuted",
+    "reaffirms no",
+)
+
+
+def _evidence_alignment_score(item: Dict[str, str]) -> int:
+    haystack = " ".join(
+        [
+            item.get("query", "") or "",
+            item.get("title", "") or "",
+            item.get("content", "") or "",
+            item.get("source", "") or "",
+        ]
+    ).lower()
+    support = sum(haystack.count(cue) for cue in _SUPPORT_CUES)
+    refute = sum(haystack.count(cue) for cue in _REFUTE_CUES)
+    return support - refute
+
+
+def _select_evidence_for_role(
+    *,
+    role: DebaterRole,
+    evidence_summary: List[Dict[str, str]],
+) -> tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    aligned: List[Dict[str, str]] = []
+    conflicting: List[Dict[str, str]] = []
+
+    for item in evidence_summary:
+        score = _evidence_alignment_score(item)
+        if role == "affirmative":
+            if score > 0:
+                aligned.append(item)
+            elif score < 0:
+                conflicting.append(item)
+        else:
+            if score < 0:
+                aligned.append(item)
+            elif score > 0:
+                conflicting.append(item)
+
+    return aligned, conflicting
+
+
+def _compact_opponent_argument(opponent_argument: Optional[str]) -> str:
+    if not opponent_argument:
+        return ""
+
+    text = opponent_argument.strip()
+    text = re.sub(r"^\[(negative|affirmative)\]\s*", "", text)
+    text = re.sub(r"In response to the opponent:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Key references:.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    return text
+
+
 def _build_argument_prompt(
     *,
     role: DebaterRole,
@@ -378,14 +459,17 @@ def _build_argument_prompt(
         "You are one side in a structured misinformation debate.\n"
         f"{role_instruction}\n"
         "Write one concise argument paragraph (4-8 sentences).\n"
-        "Use only the available evidence. If evidence is weak, acknowledge uncertainty.\n"
+        "Use only the available evidence.\n"
+        "You MUST maintain your assigned stance throughout your argument.\n"
+        "If evidence contradicts your position, argue that it is insufficient, biased, or that alternative interpretations exist.\n"
+        "Never switch sides or argue against your assigned position — that is your opponent's job.\n"
         "Cite source URLs inline when used.\n"
         "Do not invent facts.\n"
         "Return strict JSON only with shape: {\"argument\":\"...\"}\n"
         f"Claim: {claim}\n"
         f"Guidance: {guidance}\n"
-        f"Latest opponent argument: {opponent_argument or 'None'}\n"
-        f"Recent debate log (most recent last): {json.dumps(debate_log_tail, ensure_ascii=True)}\n"
+        f"Latest opponent argument: {_compact_opponent_argument(opponent_argument)[:300] or 'None'}\n"
+        f"Recent debate log (most recent last): {json.dumps([e[:200] for e in debate_log_tail], ensure_ascii=True)}\n"
         f"Retrieved evidence this turn: {json.dumps(evidence_summary, ensure_ascii=True)}\n"
     )
 
@@ -409,7 +493,7 @@ def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=45) as response:
+        with request.urlopen(http_request, timeout=60) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
@@ -444,16 +528,39 @@ def _fallback_argument_text(
             "This position is provisional until stronger supporting sources are retrieved."
         )
 
-    cited = evidence_summary[:2]
+    aligned, conflicting = _select_evidence_for_role(role=role, evidence_summary=evidence_summary)
+    cited = (aligned or conflicting or evidence_summary)[:4]
     refs: List[str] = []
+    evidence_points: List[str] = []
     for item in cited:
         title = item.get("title", "") or "untitled source"
         url = item.get("url", "") or ""
+        content = re.sub(r"\s+", " ", str(item.get("content", "") or "")).strip()
         refs.append(f"{title} ({url})" if url else title)
+        if content:
+            snippet = content[:180].rstrip()
+            evidence_points.append(f"{title}: {snippet}")
 
-    response_clause = f" In response to the opponent: {opponent_argument[:180]}." if opponent_argument else ""
+    response_excerpt = _compact_opponent_argument(opponent_argument)
+    response_clause = f" In response to the opponent: {response_excerpt}." if response_excerpt else ""
+    evidence_clause = (
+        f" Evidence observed this turn: {'; '.join(evidence_points)}."
+        if evidence_points
+        else ""
+    )
+
+    if aligned:
+        return (
+            f"I argue {stance} the claim '{claim}' using evidence that aligns with this stance.{response_clause}{evidence_clause} "
+            f"Key references: {', '.join(refs)}."
+        )
+    if conflicting:
+        return (
+            f"I argue {stance} the claim '{claim}', but the sources retrieved this turn do not substantiate this stance and mostly point the other way.{response_clause}{evidence_clause} "
+            f"Key references: {', '.join(refs)}."
+        )
     return (
-        f"I argue {stance} the claim '{claim}' using retrieved evidence.{response_clause} "
+        f"I argue {stance} the claim '{claim}', but the retrieved sources remain ambiguous for this stance.{response_clause}{evidence_clause} "
         f"Key references: {', '.join(refs)}."
     )
 
@@ -563,4 +670,3 @@ def build_debater_subgraph(*, config: AppConfig):
         return parent
 
     return run_on_parent
-

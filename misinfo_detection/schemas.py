@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class Evidence(TypedDict):
@@ -61,6 +61,7 @@ class AdvisorState(TypedDict):
 
     analysis: Optional[str]
     advice: Optional[str]
+    analysis_data: Optional[Dict[str, Any]]  # cached from advisor_analyze to avoid double LLM call
 
 
 class VerifierState(TypedDict):
