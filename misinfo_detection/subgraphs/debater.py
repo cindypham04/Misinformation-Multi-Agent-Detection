@@ -219,7 +219,7 @@ def _call_ollama_query_planner(prompt: str) -> Optional[List[str]]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=30) as response:
+        with request.urlopen(http_request, timeout=120) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
@@ -451,21 +451,26 @@ def _build_argument_prompt(
     evidence_summary: List[Dict[str, str]],
 ) -> str:
     role_instruction = (
-        "Argue AGAINST the claim and stress-test weak assumptions."
+        "You are a debating AGAINST the claim. Your job is to argue that the claim is false."
         if role == "negative"
-        else "Argue FOR the claim and present the strongest support."
+        else "You are debating FOR the claim. Your job is to argue that the claim is true."
     )
     return (
-        "You are one side in a structured misinformation debate.\n"
-        f"{role_instruction}\n"
-        "Write one concise argument paragraph (4-8 sentences).\n"
-        "Use only the available evidence.\n"
-        "You MUST maintain your assigned stance throughout your argument.\n"
-        "If evidence contradicts your position, argue that it is insufficient, biased, or that alternative interpretations exist.\n"
-        "Never switch sides or argue against your assigned position — that is your opponent's job.\n"
-        "Cite source URLs inline when used.\n"
-        "Do not invent facts.\n"
-        "Return strict JSON only with shape: {\"argument\":\"...\"}\n"
+        "You are a debate agent in a structured misinformation debate.\n"
+        f"Your role: {role_instruction}\n"
+
+        "Remain faithful to your assigned side in this round.\n"
+        "Your job is to make the strongest evidence-grounded case for your side and rebut the opposing side.\n"
+        "If evidence is incomplete, do NOT concede.\n"
+
+        "Instead, use the uncertainty strategically:\n"
+        "- highlight missing support, ambiguity, or contradictions in the opposing argument,\n"
+        "- emphasize the evidence that still favors your side,\n"
+        "- focus only on key claim-relevant points.\n"
+        
+        "Your argument should be in JSON format.\n"
+        "The JSON format should be like this:\n"
+        '{"argument": "Your argument here"}\n'
         f"Claim: {claim}\n"
         f"Guidance: {guidance}\n"
         f"Latest opponent argument: {_compact_opponent_argument(opponent_argument)[:300] or 'None'}\n"
@@ -493,7 +498,7 @@ def _call_ollama_argument_writer(prompt: str) -> Optional[str]:
     )
 
     try:
-        with request.urlopen(http_request, timeout=60) as response:
+        with request.urlopen(http_request, timeout=120) as response:
             raw_payload = json.loads(response.read().decode("utf-8"))
     except (error.URLError, TimeoutError, json.JSONDecodeError):
         return None
