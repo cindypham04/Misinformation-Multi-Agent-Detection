@@ -53,8 +53,9 @@ Create a `.env` file in the project root:
 ```env
 TAVILY_API_KEY=your_api_key_here
 
-# Optional: Configure Ollama (defaults shown)
-OLLAMA_MODEL=qwen:7b
+# Optional: Configure Ollama (examples)
+# Use one model name consistently in both .env and `ollama pull`
+OLLAMA_MODEL=llama3.2:latest
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 
 # Optional: Configure debate rounds
@@ -66,22 +67,31 @@ MAX_ROUNDS=3
 The system uses Ollama for local LLM inference. Make sure Ollama is installed and running:
 
 ```bash
-# Start Ollama server (if not already running)
+# Start Ollama server and leave this terminal running
 ollama serve
 
 # Pull the required model (in a separate terminal)
-ollama pull qwen:7b
+ollama pull llama3.2:latest
 ```
 
 Extra Notes:
 
 - A claim may take up to 5 min to run depending on the model chosen, larger models ( at least 7b or 8b parameters) is preferred.
+- If you choose a different Ollama model, update `OLLAMA_MODEL` in `.env` and use the same name in `ollama pull`.
 
 ## Run
 
 ### Option 1: Web UI (Streamlit)
 
 Launch the interactive web interface:
+
+In one terminal, start Ollama and keep it running:
+
+```bash
+ollama serve
+```
+
+In a second terminal, launch the Streamlit UI:
 
 ```bash
 streamlit run app.py
@@ -95,7 +105,8 @@ This will:
 
 Extra notes: 
 
-- When launching the streamlit app it will prompt for an email in the terminal which can be skipped, but it can prevent the browser from popping up if unanswered.
+- When launching the Streamlit app for the first time, it may prompt for an email in the terminal. You can press `Enter` to skip it.
+- If `http://localhost:8501` does not open, make sure `ollama serve` is still running in a separate terminal.
 
 ### Option 2: Command Line
 
@@ -170,5 +181,4 @@ Parts of this codebase were generated or substantially shaped with AI assistance
 | `evaluation/metrics/verifier.py`          | Verifier-specific evaluation metrics                                                                                              |
 | `tests/test_advisor.py`                   | Unit tests for the advisor subgraph                                                                                               |
 | `tests/test_verifier.py`                  | Unit tests for the verifier subgraph                                                                                              |
-
 
