@@ -1,4 +1,5 @@
 .env
 __pycache__/
 *.py[cod]
-*$py.classevaluation/results/
+*$py.class
+evaluation/results/
